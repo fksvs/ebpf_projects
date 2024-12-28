@@ -3,13 +3,22 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 
-#define MAX_PATH 4096
+#define MAX_FILENAME 256
+#define MAX_PATH 1024
+
+struct sys_enter_execve_args {
+	char _[16];
+	long filename_ptr;
+	long argv;
+	long envp;
+};
 
 struct proc_info {
 	int pid;
 	int uid;
 	int cgroup_id;
 	char comm[TASK_COMM_LEN];
+	char filename[MAX_FILENAME];
 	char cgroup_path[MAX_PATH];
 };
 
@@ -23,7 +32,7 @@ struct {
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 SEC("tp/syscalls/sys_enter_execve")
-int cgroup_path(void *ctx)
+int cgroup_path(struct sys_enter_execve_args *ctx)
 {
 	struct proc_info *proc;
 	int key = 0;
@@ -43,6 +52,12 @@ int cgroup_path(void *ctx)
 		return -1;
 	}
 
+	char *filename_ptr = (char *)ctx->filename_ptr;
+	if (bpf_probe_read_user_str(proc->filename, MAX_FILENAME, filename_ptr) < 0) {
+		bpf_printk("[sys_enter_execve] [ERROR] : cannot read filename\n");
+		return -1;
+	}
+
 	struct task_struct *tsp = (struct task_struct *)bpf_get_current_task();
 	if (tsp == NULL) {
 		bpf_printk("[sys_enter_execve] [ERROR] : cannot read task_struct\n");
@@ -54,10 +69,6 @@ int cgroup_path(void *ctx)
 		bpf_printk("[sys_enter_execve] [ERROR] : cannot read cgroup path\n");
 		return -1;
 	}
-
-	bpf_printk("pid : %d uid : %d cgroupid : %d command : %s cgroup path : %s",
-			proc->pid, proc->uid, proc->cgroup_id,
-			proc->comm, proc->cgroup_path);
 
 	return 0;
 }
